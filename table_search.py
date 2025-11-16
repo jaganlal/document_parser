@@ -1,3 +1,9 @@
+"""
+Improved Table Search Engine
+Works with both VERTICAL (key-value) and HORIZONTAL (standard) tables.
+Supports fuzzy matching, case-insensitive search, and flexible querying.
+"""
+
 import json
 import re
 from typing import List, Dict, Any, Optional, Union
@@ -21,29 +27,24 @@ class SearchResult:
     table_index: int
     table_source: str
     table_title: str
+    table_type: str  # "vertical" or "horizontal"
     row: int
     col: int
     header: str
     header_levels: List[str]
     cell_text: str
     match_score: float = 1.0
-    match_type: str = "cell"  # 'cell', 'header', 'header_level', 'title'
+    match_type: str = "cell"
     matched_header_level: Optional[int] = None
     context: Optional[Dict[str, Any]] = None
 
-class TableSearchEngine:
+
+class UnifiedTableSearchEngine:
     """
-    Advanced search engine for table data with cell-level granularity.
-    Supports multi-row headers, grouped columns, and table titles.
+    Unified search engine that handles both vertical and horizontal tables.
     """
     
     def __init__(self, tables_data: List[Dict[str, Any]]):
-        """
-        Initialize search engine with table data.
-        
-        Args:
-            tables_data: List of table dictionaries with enhanced structure
-        """
         self.tables = tables_data
         self._build_index()
     
@@ -56,24 +57,23 @@ class TableSearchEngine:
             table_idx = table.get("index", 0)
             table_source = table.get("source", "unknown")
             table_title = table.get("title", "")
+            table_type = table.get("table_type", "horizontal")
             column_headers = table.get("column_headers", [])
             
-            # Index table metadata
             self.table_index.append({
                 "table_index": table_idx,
                 "table_source": table_source,
                 "table_title": table_title,
+                "table_type": table_type,
                 "num_rows": table.get("num_rows", 0),
                 "num_columns": table.get("num_columns", 0),
                 "header_row_count": table.get("header_row_count", 1),
                 "column_groups": table.get("column_groups", []),
             })
             
-            # Index data cells
             for cell in table.get("cells", []):
                 col_idx = cell.get("col", 0)
                 
-                # Get column header info
                 col_header_info = None
                 for ch in column_headers:
                     if ch["col"] == col_idx:
@@ -88,264 +88,19 @@ class TableSearchEngine:
                     "table_index": table_idx,
                     "table_source": table_source,
                     "table_title": table_title,
+                    "table_type": table_type,
                     "row": cell.get("row"),
                     "col": col_idx,
                     "header": cell.get("header", ""),
                     "header_levels": header_levels,
                     "text": cell.get("text", ""),
                     "is_numeric": cell.get("is_numeric", False),
-                    "table_headers": table.get("headers", []),
-                    "table_num_rows": table.get("num_rows", 0),
-                    "table_num_cols": table.get("num_columns", 0),
-                    "table_header_row_count": table.get("header_row_count", 1),
-                    "column_groups": table.get("column_groups", []),
                 })
-    
-    def search(
-        self,
-        query: str,
-        mode: SearchMode = SearchMode.CONTAINS,
-        case_sensitive: bool = False,
-        search_titles: bool = True,
-        search_headers: bool = True,
-        search_cells: bool = True,
-        search_all_header_levels: bool = True,
-        table_index: Optional[int] = None,
-        table_title: Optional[str] = None,
-        column: Optional[str] = None,
-        column_group: Optional[str] = None,
-        header_level: Optional[int] = None,
-        row: Optional[int] = None,
-        numeric_only: bool = False,
-        max_results: Optional[int] = None,
-    ) -> List[SearchResult]:
-        """
-        Search tables at cell level with support for hierarchical headers and titles.
-        
-        Args:
-            query: Search query string
-            mode: Search mode (exact, contains, starts_with, ends_with, regex, fuzzy)
-            case_sensitive: Whether search is case-sensitive
-            search_titles: Include table titles in search
-            search_headers: Include header names in search
-            search_cells: Include cell values in search
-            search_all_header_levels: Search across all header levels
-            table_index: Filter by specific table index
-            table_title: Filter by table title (partial match)
-            column: Filter by column header name (full path)
-            column_group: Filter by column group parent name
-            header_level: Search only in specific header level (0-based)
-            row: Filter by specific row number
-            numeric_only: Only search numeric cells
-            max_results: Maximum number of results to return
-        
-        Returns:
-            List of SearchResult objects
-        """
-        results = []
-        
-        # Search in table titles first
-        if search_titles and query:
-            for table_meta in self.table_index:
-                if table_index is not None and table_meta["table_index"] != table_index:
-                    continue
-                
-                if table_meta["table_title"]:
-                    match_result = self._match_text(
-                        query, table_meta["table_title"], mode, case_sensitive
-                    )
-                    if match_result["matched"]:
-                        # Return a representative result for the table
-                        results.append(SearchResult(
-                            table_index=table_meta["table_index"],
-                            table_source=table_meta["table_source"],
-                            table_title=table_meta["table_title"],
-                            row=-1,  # Special value for title match
-                            col=-1,
-                            header="",
-                            header_levels=[],
-                            cell_text="",
-                            match_score=match_result["score"],
-                            match_type="title",
-                            context={
-                                "table_size": f"{table_meta['num_rows']}x{table_meta['num_columns']}",
-                                "header_row_count": table_meta["header_row_count"],
-                            },
-                        ))
-        
-        # Search in cells
-        for cell_data in self.cell_index:
-            # Apply filters
-            if table_index is not None and cell_data["table_index"] != table_index:
-                continue
-            
-            if table_title is not None and table_title.lower() not in cell_data["table_title"].lower():
-                continue
-            
-            if column is not None and cell_data["header"] != column:
-                continue
-            
-            if row is not None and cell_data["row"] != row:
-                continue
-            
-            if numeric_only and not cell_data["is_numeric"]:
-                continue
-            
-            # Filter by column group
-            if column_group is not None:
-                col_idx = cell_data["col"]
-                in_group = False
-                for group in cell_data["column_groups"]:
-                    if group["parent"] == column_group and col_idx in group["columns"]:
-                        in_group = True
-                        break
-                if not in_group:
-                    continue
-            
-            # Search in cell text
-            if search_cells and query:
-                match_result = self._match_text(
-                    query, cell_data["text"], mode, case_sensitive
-                )
-                if match_result["matched"]:
-                    results.append(SearchResult(
-                        table_index=cell_data["table_index"],
-                        table_source=cell_data["table_source"],
-                        table_title=cell_data["table_title"],
-                        row=cell_data["row"],
-                        col=cell_data["col"],
-                        header=cell_data["header"],
-                        header_levels=cell_data["header_levels"],
-                        cell_text=cell_data["text"],
-                        match_score=match_result["score"],
-                        match_type="cell",
-                        context=self._get_cell_context(cell_data),
-                    ))
-            
-            # Search in header levels
-            if search_headers and cell_data["header_levels"] and query:
-                if search_all_header_levels:
-                    # Search across all levels
-                    for level_idx, level_text in enumerate(cell_data["header_levels"]):
-                        if header_level is not None and level_idx != header_level:
-                            continue
-                        
-                        match_result = self._match_text(
-                            query, level_text, mode, case_sensitive
-                        )
-                        if match_result["matched"]:
-                            results.append(SearchResult(
-                                table_index=cell_data["table_index"],
-                                table_source=cell_data["table_source"],
-                                table_title=cell_data["table_title"],
-                                row=cell_data["row"],
-                                col=cell_data["col"],
-                                header=cell_data["header"],
-                                header_levels=cell_data["header_levels"],
-                                cell_text=cell_data["text"],
-                                match_score=match_result["score"],
-                                match_type="header_level",
-                                matched_header_level=level_idx,
-                                context=self._get_cell_context(cell_data),
-                            ))
-                else:
-                    # Search only in full header path
-                    match_result = self._match_text(
-                        query, cell_data["header"], mode, case_sensitive
-                    )
-                    if match_result["matched"]:
-                        results.append(SearchResult(
-                            table_index=cell_data["table_index"],
-                            table_source=cell_data["table_source"],
-                            table_title=cell_data["table_title"],
-                            row=cell_data["row"],
-                            col=cell_data["col"],
-                            header=cell_data["header"],
-                            header_levels=cell_data["header_levels"],
-                            cell_text=cell_data["text"],
-                            match_score=match_result["score"],
-                            match_type="header",
-                            context=self._get_cell_context(cell_data),
-                        ))
-        
-        # Remove duplicates (same cell matched multiple times)
-        seen = set()
-        unique_results = []
-        for r in results:
-            key = (r.table_index, r.row, r.col, r.match_type)
-            if key not in seen:
-                seen.add(key)
-                unique_results.append(r)
-        
-        # Sort by match score (descending), then by table/row/col
-        unique_results.sort(
-            key=lambda x: (-x.match_score, x.table_index, x.row if x.row >= 0 else 0, x.col if x.col >= 0 else 0)
-        )
-        
-        # Apply max_results limit
-        if max_results:
-            unique_results = unique_results[:max_results]
-        
-        return unique_results
-    
-    def search_by_title(
-        self,
-        title_query: str,
-        mode: SearchMode = SearchMode.CONTAINS
-    ) -> List[int]:
-        """
-        Search for tables by title and return table indices.
-        
-        Args:
-            title_query: Search query for table title
-            mode: Search mode
-        
-        Returns:
-            List of table indices that match
-        """
-        matching_tables = []
-        
-        for table_meta in self.table_index:
-            if table_meta["table_title"]:
-                match_result = self._match_text(
-                    title_query, table_meta["table_title"], mode, False
-                )
-                if match_result["matched"]:
-                    matching_tables.append(table_meta["table_index"])
-        
-        return matching_tables
-    
-    def get_table_by_title(
-        self,
-        title_query: str,
-        mode: SearchMode = SearchMode.CONTAINS
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Get the first table that matches the title query.
-        
-        Args:
-            title_query: Search query for table title
-            mode: Search mode
-        
-        Returns:
-            Table dict or None
-        """
-        matching_indices = self.search_by_title(title_query, mode)
-        
-        if matching_indices:
-            return self.tables[matching_indices[0]]
-        
-        return None
     
     def _match_text(
         self, query: str, text: str, mode: SearchMode, case_sensitive: bool
     ) -> Dict[str, Any]:
-        """
-        Match query against text based on mode.
-        
-        Returns:
-            Dict with 'matched' (bool) and 'score' (float)
-        """
+        """Match query against text based on mode."""
         if not case_sensitive:
             query = query.lower()
             text = text.lower()
@@ -386,10 +141,7 @@ class TableSearchEngine:
         return {"matched": matched, "score": score}
     
     def _fuzzy_match_score(self, query: str, text: str) -> float:
-        """
-        Calculate fuzzy match score using Levenshtein distance.
-        Returns score between 0 and 1.
-        """
+        """Calculate fuzzy match score using Levenshtein distance."""
         if not query or not text:
             return 0.0
         
@@ -418,53 +170,136 @@ class TableSearchEngine:
         
         return similarity
     
-    def _get_cell_context(self, cell_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Get contextual information about a cell."""
-        return {
-            "table_title": cell_data.get("table_title", ""),
-            "table_headers": cell_data["table_headers"],
-            "table_size": f"{cell_data['table_num_rows']}x{cell_data['table_num_cols']}",
-            "position": f"({cell_data['row']}, {cell_data['col']})",
-            "header_row_count": cell_data["table_header_row_count"],
-            "column_groups": cell_data["column_groups"],
-        }
-    
-    def search_by_column(
-        self, 
-        column_name: str, 
-        value: str = None,
+    def search_by_key_value(
+        self,
+        key_query: str,
+        table_title: Optional[str] = None,
         mode: SearchMode = SearchMode.CONTAINS,
-        table_title: Optional[str] = None
+        case_sensitive: bool = False
     ) -> List[SearchResult]:
         """
-        Search for all cells in a specific column, optionally filtering by value and table title.
+        Search for a key in VERTICAL tables and return the corresponding value.
+        
+        For vertical tables like:
+        | Pathology | Dr. Smith |
+        | Clinical  | Dr. Jones |
         
         Args:
-            column_name: Name of the column header (full path or any level)
-            value: Optional value to filter by
-            mode: Search mode for value matching
+            key_query: The key to search for (e.g., "Pathology")
             table_title: Optional table title filter
+            mode: Search mode
+            case_sensitive: Whether search is case-sensitive
+        
+        Returns:
+            List of SearchResult objects with matching key-value pairs
         """
         results = []
         
         for cell_data in self.cell_index:
+            # Only search in vertical tables
+            if cell_data["table_type"] != "vertical":
+                continue
+            
             # Filter by table title
-            if table_title is not None and table_title.lower() not in cell_data["table_title"].lower():
+            if table_title and table_title.lower() not in cell_data["table_title"].lower():
                 continue
             
-            # Check if column_name matches any header level
-            matches_column = False
+            # Only search in the first column (keys)
+            if cell_data["col"] != 0:
+                continue
+            
+            # Match the key
+            match_result = self._match_text(
+                key_query, cell_data["text"], mode, case_sensitive
+            )
+            
+            if match_result["matched"]:
+                # Find the corresponding value(s) in the same row
+                row_num = cell_data["row"]
+                table_idx = cell_data["table_index"]
+                
+                # Get all cells in this row
+                row_cells = [
+                    c for c in self.cell_index
+                    if c["table_index"] == table_idx and c["row"] == row_num
+                ]
+                
+                # Sort by column
+                row_cells.sort(key=lambda x: x["col"])
+                
+                # Create results for each value column
+                for cell in row_cells:
+                    if cell["col"] > 0:  # Skip the key column
+                        results.append(SearchResult(
+                            table_index=table_idx,
+                            table_source=cell_data["table_source"],
+                            table_title=cell_data["table_title"],
+                            table_type="vertical",
+                            row=row_num,
+                            col=cell["col"],
+                            header=cell["header"],
+                            header_levels=cell["header_levels"],
+                            cell_text=cell["text"],
+                            match_score=match_result["score"],
+                            match_type="key_value",
+                            context={
+                                "key": cell_data["text"],
+                                "key_column": cell_data["header"],
+                                "value_column": cell["header"],
+                            },
+                        ))
+        
+        return results
+    
+    def search_by_column(
+        self,
+        column_name: str,
+        value_query: Optional[str] = None,
+        table_title: Optional[str] = None,
+        mode: SearchMode = SearchMode.CONTAINS,
+        case_sensitive: bool = False
+    ) -> List[SearchResult]:
+        """
+        Search for values in a specific column of HORIZONTAL tables.
+        
+        Args:
+            column_name: Name of the column to search in
+            value_query: Optional value to search for (if None, returns all values in column)
+            table_title: Optional table title filter
+            mode: Search mode
+            case_sensitive: Whether search is case-sensitive
+        
+        Returns:
+            List of SearchResult objects
+        """
+        results = []
+        
+        for cell_data in self.cell_index:
+            # Only search in horizontal tables
+            if cell_data["table_type"] != "horizontal":
+                continue
+            
+            # Filter by table title
+            if table_title and table_title.lower() not in cell_data["table_title"].lower():
+                continue
+            
+            # Check if column matches
+            column_match = False
             if cell_data["header"] == column_name:
-                matches_column = True
+                column_match = True
             elif column_name in cell_data["header_levels"]:
-                matches_column = True
+                column_match = True
+            elif any(column_name.lower() in level.lower() for level in cell_data["header_levels"]):
+                column_match = True
             
-            if not matches_column:
+            if not column_match:
                 continue
             
-            # If value filter is specified, check it
-            if value is not None:
-                match_result = self._match_text(value, cell_data["text"], mode, False)
+            # If value_query is specified, match it
+            if value_query is not None:
+                match_result = self._match_text(
+                    value_query, cell_data["text"], mode, case_sensitive
+                )
                 if not match_result["matched"]:
                     continue
                 score = match_result["score"]
@@ -475,791 +310,171 @@ class TableSearchEngine:
                 table_index=cell_data["table_index"],
                 table_source=cell_data["table_source"],
                 table_title=cell_data["table_title"],
+                table_type="horizontal",
                 row=cell_data["row"],
                 col=cell_data["col"],
                 header=cell_data["header"],
                 header_levels=cell_data["header_levels"],
                 cell_text=cell_data["text"],
                 match_score=score,
-                match_type="column_filter",
-                context=self._get_cell_context(cell_data),
+                match_type="column_search",
             ))
         
         return results
     
-    def search_by_column_group(
-        self, 
-        group_name: str, 
-        value: str = None,
-        table_title: Optional[str] = None
-    ) -> List[SearchResult]:
-        """
-        Search for all cells under a column group.
-        
-        Args:
-            group_name: Parent name of the column group
-            value: Optional value to filter by
-            table_title: Optional table title filter
-        """
-        return self.search(
-            query=value if value else "",
-            mode=SearchMode.CONTAINS,
-            search_titles=False,
-            search_headers=False,
-            search_cells=True if value else False,
-            column_group=group_name,
-            table_title=table_title,
-        )
-    
-    def search_by_row(
-        self, 
-        table_index: int, 
-        row_number: int
-    ) -> List[SearchResult]:
-        """Get all cells in a specific row of a table."""
-        results = []
-        
-        for cell_data in self.cell_index:
-            if cell_data["table_index"] == table_index and cell_data["row"] == row_number:
-                results.append(SearchResult(
-                    table_index=cell_data["table_index"],
-                    table_source=cell_data["table_source"],
-                    table_title=cell_data["table_title"],
-                    row=cell_data["row"],
-                    col=cell_data["col"],
-                    header=cell_data["header"],
-                    header_levels=cell_data["header_levels"],
-                    cell_text=cell_data["text"],
-                    match_score=1.0,
-                    match_type="row_filter",
-                    context=self._get_cell_context(cell_data),
-                ))
-        
-        return results
-    
-    def search_by_header_level(
+    def get_row_by_column_value(
         self,
-        query: str,
-        level: int,
-        mode: SearchMode = SearchMode.CONTAINS,
-        table_title: Optional[str] = None
-    ) -> List[SearchResult]:
-        """
-        Search in a specific header level.
-        
-        Args:
-            query: Search query
-            level: Header level (0 = top level, 1 = second level, etc.)
-            mode: Search mode
-            table_title: Optional table title filter
-        """
-        return self.search(
-            query=query,
-            mode=mode,
-            search_titles=False,
-            search_headers=True,
-            search_cells=False,
-            search_all_header_levels=True,
-            header_level=level,
-            table_title=table_title,
-        )
-    
-    def search_numeric_range(
-        self,
-        column: Optional[str] = None,
-        column_group: Optional[str] = None,
+        column_name: str,
+        value_query: str,
         table_title: Optional[str] = None,
-        min_value: float = None,
-        max_value: float = None,
-    ) -> List[SearchResult]:
-        """
-        Search for numeric values within a range.
-        
-        Args:
-            column: Column header name (optional)
-            column_group: Column group name (optional)
-            table_title: Table title filter (optional)
-            min_value: Minimum value (inclusive)
-            max_value: Maximum value (inclusive)
-        """
-        results = []
-        
-        for cell_data in self.cell_index:
-            # Filter by table title
-            if table_title is not None and table_title.lower() not in cell_data["table_title"].lower():
-                continue
-            
-            # Apply column filter
-            if column is not None:
-                matches_column = (
-                    cell_data["header"] == column or 
-                    column in cell_data["header_levels"]
-                )
-                if not matches_column:
-                    continue
-            
-            # Apply column group filter
-            if column_group is not None:
-                col_idx = cell_data["col"]
-                in_group = False
-                for group in cell_data["column_groups"]:
-                    if group["parent"] == column_group and col_idx in group["columns"]:
-                        in_group = True
-                        break
-                if not in_group:
-                    continue
-            
-            # Try to parse as number
-            try:
-                cell_value = float(cell_data["text"].replace(",", "").replace("$", "").strip())
-                
-                # Check range
-                if min_value is not None and cell_value < min_value:
-                    continue
-                if max_value is not None and cell_value > max_value:
-                    continue
-                
-                results.append(SearchResult(
-                    table_index=cell_data["table_index"],
-                    table_source=cell_data["table_source"],
-                    table_title=cell_data["table_title"],
-                    row=cell_data["row"],
-                    col=cell_data["col"],
-                    header=cell_data["header"],
-                    header_levels=cell_data["header_levels"],
-                    cell_text=cell_data["text"],
-                    match_score=1.0,
-                    match_type="numeric_range",
-                    context=self._get_cell_context(cell_data),
-                ))
-            except (ValueError, AttributeError):
-                continue
-        
-        return results
-    
-    def get_cell(
-        self, 
-        table_index: int, 
-        row: int, 
-        col: int
-    ) -> Optional[SearchResult]:
-        """Get a specific cell by table index, row, and column."""
-        for cell_data in self.cell_index:
-            if (
-                cell_data["table_index"] == table_index
-                and cell_data["row"] == row
-                and cell_data["col"] == col
-            ):
-                return SearchResult(
-                    table_index=cell_data["table_index"],
-                    table_source=cell_data["table_source"],
-                    table_title=cell_data["table_title"],
-                    row=cell_data["row"],
-                    col=cell_data["col"],
-                    header=cell_data["header"],
-                    header_levels=cell_data["header_levels"],
-                    cell_text=cell_data["text"],
-                    match_score=1.0,
-                    match_type="direct_access",
-                    context=self._get_cell_context(cell_data),
-                )
-        return None
-    
-    def get_column_info(self, table_index: int) -> List[Dict[str, Any]]:
-        """Get detailed column information for a table."""
-        table = self.tables[table_index]
-        return table.get("column_headers", [])
-    
-    def get_column_groups(self, table_index: int) -> List[Dict[str, Any]]:
-        """Get column group information for a table."""
-        table = self.tables[table_index]
-        return table.get("column_groups", [])
-    
-    def get_table_summary(self, table_index: int) -> Dict[str, Any]:
-        """Get summary information about a specific table."""
-        table = self.tables[table_index]
-        
-        return {
-            "index": table.get("index"),
-            "source": table.get("source"),
-            "title": table.get("title", ""),
-            "num_rows": table.get("num_rows"),
-            "num_columns": table.get("num_columns"),
-            "header_row_count": table.get("header_row_count", 1),
-            "headers": table.get("headers"),
-            "column_headers": table.get("column_headers", []),
-            "column_groups": table.get("column_groups", []),
-            "total_cells": len(table.get("cells", [])),
-        }
-    
-    def list_all_tables(self) -> List[Dict[str, Any]]:
-        """List all tables with their titles and basic info."""
-        return [
-            {
-                "index": t["table_index"],
-                "title": t["table_title"],
-                "source": t["table_source"],
-                "size": f"{t['num_rows']}x{t['num_columns']}",
-            }
-            for t in self.table_index
-        ]
-    
-    def export_results_to_dict(
-        self, 
-        results: List[SearchResult]
-    ) -> List[Dict[str, Any]]:
-        """Export search results to a list of dictionaries."""
-        return [
-            {
-                "table_index": r.table_index,
-                "table_source": r.table_source,
-                "table_title": r.table_title,
-                "row": r.row,
-                "col": r.col,
-                "header": r.header,
-                "header_levels": r.header_levels,
-                "cell_text": r.cell_text,
-                "match_score": r.match_score,
-                "match_type": r.match_type,
-                "matched_header_level": r.matched_header_level,
-                "context": r.context,
-            }
-            for r in results
-        ]
-
-    def get_row_data(
-        self, 
-        table_index: int, 
-        row_number: int,
-        as_dict: bool = True
-    ) -> Union[Dict[str, str], List[str]]:
-        """
-        Get all data from a specific row.
-        
-        Args:
-            table_index: Table index
-            row_number: Row number
-            as_dict: If True, return as {header: value} dict, else as list
-        
-        Returns:
-            Dict mapping headers to values, or list of values
-        """
-        row_cells = self.search_by_row(table_index, row_number)
-        
-        if not row_cells:
-            return {} if as_dict else []
-        
-        # Sort by column index
-        row_cells.sort(key=lambda x: x.col)
-        
-        if as_dict:
-            return {cell.header: cell.cell_text for cell in row_cells}
-        else:
-            return [cell.cell_text for cell in row_cells]
-
-    def get_cell_value_by_header(
-        self,
-        table_index: int,
-        row_number: int,
-        header_name: str
-    ) -> Optional[str]:
-        """
-        Get the value of a specific cell by table, row, and column header name.
-        
-        Args:
-            table_index: Table index
-            row_number: Row number
-            header_name: Column header name (can be full path or any level)
-        
-        Returns:
-            Cell value or None if not found
-        """
-        for cell_data in self.cell_index:
-            if (
-                cell_data["table_index"] == table_index
-                and cell_data["row"] == row_number
-            ):
-                # Check if header matches
-                if (
-                    cell_data["header"] == header_name
-                    or header_name in cell_data["header_levels"]
-                ):
-                    return cell_data["text"]
-        
-        return None
-
-    def search_with_related_columns(
-        self,
-        query: str,
-        search_column: Optional[str] = None,
-        return_columns: Optional[List[str]] = None,
         mode: SearchMode = SearchMode.CONTAINS,
-        table_index: Optional[int] = None,
-        table_title: Optional[str] = None,
-        max_results: Optional[int] = None,
+        case_sensitive: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        Search in one column and return values from related columns in the same row.
-        
-        Args:
-            query: Search query
-            search_column: Column to search in (if None, searches all columns)
-            return_columns: List of column headers to return values from
-                        (if None, returns all columns)
-            mode: Search mode
-            table_index: Filter by table index
-            table_title: Filter by table title
-            max_results: Maximum results to return
-        
-        Returns:
-            List of dicts with matched row data
-        """
-        # First, search for matching cells
-        if search_column:
-            results = self.search_by_column(
-                column_name=search_column,
-                value=query,
-                mode=mode,
-                table_title=table_title
-            )
-        else:
-            results = self.search(
-                query=query,
-                mode=mode,
-                table_index=table_index,
-                table_title=table_title,
-                search_cells=True,
-                search_headers=False,
-                search_titles=False,
-            )
-        
-        if table_index is not None:
-            results = [r for r in results if r.table_index == table_index]
-        
-        # For each result, get the full row data
-        enriched_results = []
-        
-        for result in results:
-            if result.row < 0:  # Skip title matches
-                continue
-            
-            # Get full row data
-            row_data = self.get_row_data(result.table_index, result.row, as_dict=True)
-            
-            # Filter to requested columns if specified
-            if return_columns:
-                filtered_data = {}
-                for col_name in return_columns:
-                    # Try to find the column in row_data
-                    value = None
-                    for header, val in row_data.items():
-                        if header == col_name or col_name in header:
-                            value = val
-                            break
-                    filtered_data[col_name] = value
-                row_data = filtered_data
-            
-            enriched_results.append({
-                "table_index": result.table_index,
-                "table_title": result.table_title,
-                "table_source": result.table_source,
-                "row": result.row,
-                "matched_column": result.header,
-                "matched_value": result.cell_text,
-                "match_score": result.match_score,
-                "row_data": row_data,
-            })
-        
-        if max_results:
-            enriched_results = enriched_results[:max_results]
-        
-        return enriched_results
-
-    def search_and_get_column_value(
-        self,
-        query: str,
-        search_column: str,
-        return_column: str,
-        mode: SearchMode = SearchMode.CONTAINS,
-        table_index: Optional[int] = None,
-        table_title: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        Search in one column and return the corresponding value from another column.
-        
-        This is a convenience method for the common use case of:
-        "Find rows where column A contains X, and give me the value from column B"
-        
-        Args:
-            query: Search query
-            search_column: Column to search in
-            return_column: Column to return value from
-            mode: Search mode
-            table_index: Filter by table index
-            table_title: Filter by table title
-        
-        Returns:
-            List of dicts with search match and corresponding value
+        Find rows where a column contains a specific value, return entire row.
         
         Example:
-            # Find "Pathology" in "Role" column, return "Details" value
-            results = search_engine.search_and_get_column_value(
-                query="Pathology",
-                search_column="Role",
-                return_column="Details",
-                table_title="CONTRIBUTING SCIENTISTS"
-            )
-        """
-        # Search in the specified column
-        search_results = self.search_by_column(
-            column_name=search_column,
-            value=query,
-            mode=mode,
-            table_title=table_title
-        )
-        
-        if table_index is not None:
-            search_results = [r for r in search_results if r.table_index == table_index]
-        
-        # For each match, get the corresponding value from return_column
-        results = []
-        
-        for result in search_results:
-            if result.row < 0:  # Skip title matches
-                continue
-            
-            # Get the value from the return column
-            return_value = self.get_cell_value_by_header(
-                table_index=result.table_index,
-                row_number=result.row,
-                header_name=return_column
-            )
-            
-            results.append({
-                "table_index": result.table_index,
-                "table_title": result.table_title,
-                "table_source": result.table_source,
-                "row": result.row,
-                "search_column": search_column,
-                "search_value": result.cell_text,
-                "return_column": return_column,
-                "return_value": return_value,
-                "match_score": result.match_score,
-            })
-        
-        return results
-
-    def search_and_get_row(
-        self,
-        query: str,
-        mode: SearchMode = SearchMode.CONTAINS,
-        table_index: Optional[int] = None,
-        table_title: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        Search for a query and return the entire row data for each match.
-        This doesn't assume any column names.
+            Find rows where "Group Number" = "2", return all columns
         
         Args:
-            query: Search query
+            column_name: Column to search in
+            value_query: Value to search for
+            table_title: Optional table title filter
             mode: Search mode
-            table_index: Filter by table index
-            table_title: Filter by table title
+            case_sensitive: Whether search is case-sensitive
         
         Returns:
             List of dicts with full row data
         """
-        # Search for the query
-        search_results = self.search(
-            query=query,
-            mode=mode,
-            table_index=table_index,
-            table_title=table_title,
-            search_cells=True,
-            search_headers=False,
-            search_titles=False,
+        # First, find matching cells
+        matching_cells = self.search_by_column(
+            column_name, value_query, table_title, mode, case_sensitive
         )
         
-        # For each match, get the full row
         results = []
-        seen_rows = set()  # Avoid duplicates
+        seen_rows = set()
         
-        for result in search_results:
-            if result.row < 0:  # Skip title matches
-                continue
-            
-            row_key = (result.table_index, result.row)
+        for cell in matching_cells:
+            row_key = (cell.table_index, cell.row)
             if row_key in seen_rows:
                 continue
             seen_rows.add(row_key)
             
             # Get all cells in this row
             row_cells = [
-                c for c in self.cell_index 
-                if c['table_index'] == result.table_index and c['row'] == result.row
+                c for c in self.cell_index
+                if c["table_index"] == cell.table_index and c["row"] == cell.row
             ]
             
             # Sort by column
-            row_cells.sort(key=lambda x: x['col'])
+            row_cells.sort(key=lambda x: x["col"])
             
-            # Build row data
+            # Build row data dict
             row_data = {}
-            for cell in row_cells:
-                header = cell.get('header', f"Column_{cell['col']}")
-                row_data[header] = cell.get('text', '')
+            for rc in row_cells:
+                row_data[rc["header"]] = rc["text"]
             
             results.append({
-                "table_index": result.table_index,
-                "table_title": result.table_title,
-                "table_source": result.table_source,
-                "row": result.row,
-                "matched_in_column": result.header,
-                "matched_value": result.cell_text,
-                "match_score": result.match_score,
+                "table_index": cell.table_index,
+                "table_title": cell.table_title,
+                "table_type": cell.table_type,
+                "row": cell.row,
+                "matched_column": cell.header,
+                "matched_value": cell.cell_text,
+                "match_score": cell.match_score,
                 "row_data": row_data,
-                "all_values": [cell.get('text', '') for cell in row_cells],
             })
         
         return results
-
-    def find_table_index_by_title(self, title_query: str) -> int | None:
-        """
-        Find the table index whose title contains title_query (case-insensitive).
-        """
-        q = title_query.lower()
-        for t in self.tables:
-            title = (t.get("title") or "").lower()
-            if q in title:
-                return t["index"]
-        return None
     
-    def get_table_rows_as_lists(self, table_index: int) -> list[list[str]]:
+    def search_anywhere(
+        self,
+        query: str,
+        table_title: Optional[str] = None,
+        table_type: Optional[str] = None,
+        mode: SearchMode = SearchMode.CONTAINS,
+        case_sensitive: bool = False,
+        max_results: Optional[int] = None
+    ) -> List[SearchResult]:
         """
-        Return table rows as a list of lists of cell text, in column order.
-        """
-        table = self.tables[table_index]
-        n_cols = table.get("num_columns", 0)
-        n_rows = table.get("num_rows", 0)
-        rows = [[""] * n_cols for _ in range(n_rows)]
-        for cell in table.get("cells", []):
-            r = cell["row"]
-            c = cell["col"]
-            if 0 <= r < n_rows and 0 <= c < n_cols:
-                rows[r][c] = cell.get("text", "")
-        return rows
-    
-    def search_roles_and_values_in_table(self, json_file, table_name, role_match=None, value_match=None):
-        """
-        Search for roles and values in a specific table from the extracted JSON.
+        Search for a query anywhere in tables (cells, headers, titles).
         
         Args:
-            json_file: Path to the JSON file containing extracted tables
-            table_name: Name of the table to search in
-            role_match: Role/column to search for (e.g., "Clinical Assessment", "Pathology")
-            value_match: Value to search for in any cell
+            query: Search query
+            table_title: Optional table title filter
+            table_type: Optional table type filter ("vertical" or "horizontal")
+            mode: Search mode
+            case_sensitive: Whether search is case-sensitive
+            max_results: Maximum number of results
         
         Returns:
-            List of matching results with context
+            List of SearchResult objects
         """
-        import json
-        
-        # Load the JSON file
-        with open(json_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
         results = []
         
-        # Find the specified table
-        for table in data.get('tables', []):
-            if table.get('title', '').strip().lower() == table_name.strip().lower():
-                headers = table.get('headers', [])
-                rows = table.get('rows', [])
-                
-                # Special handling for CONTRIBUTING SCIENTISTS table
-                if 'contributing scientists' in table_name.lower():
-                    results.extend(self.search_contributing_scientists_table(
-                        table, role_match
-                    ))
-                else:
-                    # Standard table search
-                    results.extend(self.search_standard_table(
-                        table, headers, rows, role_match
-                    ))
+        # Search in cells
+        for cell_data in self.cell_index:
+            # Apply filters
+            if table_title and table_title.lower() not in cell_data["table_title"].lower():
+                continue
+            
+            if table_type and cell_data["table_type"] != table_type:
+                continue
+            
+            # Search in cell text
+            match_result = self._match_text(
+                query, cell_data["text"], mode, case_sensitive
+            )
+            
+            if match_result["matched"]:
+                results.append(SearchResult(
+                    table_index=cell_data["table_index"],
+                    table_source=cell_data["table_source"],
+                    table_title=cell_data["table_title"],
+                    table_type=cell_data["table_type"],
+                    row=cell_data["row"],
+                    col=cell_data["col"],
+                    header=cell_data["header"],
+                    header_levels=cell_data["header_levels"],
+                    cell_text=cell_data["text"],
+                    match_score=match_result["score"],
+                    match_type="cell",
+                ))
+        
+        # Sort by match score
+        results.sort(key=lambda x: (-x.match_score, x.table_index, x.row, x.col))
+        
+        if max_results:
+            results = results[:max_results]
         
         return results
+    
+    def list_all_tables(self) -> List[Dict[str, Any]]:
+        """List all tables with their metadata."""
+        return [
+            {
+                "index": t["table_index"],
+                "title": t["table_title"],
+                "type": t["table_type"],
+                "source": t["table_source"],
+                "size": f"{t['num_rows']}x{t['num_columns']}",
+            }
+            for t in self.table_index
+        ]
+    
+    def get_table_by_title(
+        self,
+        title_query: str,
+        mode: SearchMode = SearchMode.CONTAINS
+    ) -> Optional[Dict[str, Any]]:
+        """Get the first table matching the title query."""
+        for table in self.tables:
+            title = table.get("title", "")
+            match_result = self._match_text(title_query, title, mode, False)
+            if match_result["matched"]:
+                return table
+        return None
 
-    def search_contributing_scientists_table(self, table, role_match=None, value_match=None):
-        """
-        Special search logic for the CONTRIBUTING SCIENTISTS table with multi-level headers.
-        """
-        results = []
-        headers = table.get('headers', [])
-        rows = table.get('rows', [])
-        
-        if not headers or not rows:
-            return results
-        
-        # Build role-to-column mapping from headers
-        # Headers structure: [level0_headers, level1_headers, ...]
-        role_columns = {}
-        
-        if len(headers) >= 2:
-            # Level 0: Main categories (e.g., "Clinical Assessment", "Pathology")
-            # Level 1: Subcategories (e.g., "In-Life", "Necropsy")
-            level0 = headers[0]
-            level1 = headers[1] if len(headers) > 1 else []
-            
-            # Map each level1 column to its parent level0 role
-            col_idx = 0
-            for h0 in level0:
-                role_name = h0.get('text', '').strip()
-                colspan = h0.get('colspan', 1)
-                
-                # This role spans multiple columns
-                for i in range(colspan):
-                    if col_idx + i < len(level1):
-                        subcol_name = level1[col_idx + i].get('text', '').strip()
-                        role_columns[col_idx + i] = {
-                            'role': role_name,
-                            'subcategory': subcol_name
-                        }
-                
-                col_idx += colspan
-        
-        # Search based on role_match
-        if role_match:
-            role_match_lower = role_match.strip().lower()
-            
-            # Find columns that match the role
-            matching_columns = []
-            for col_idx, role_info in role_columns.items():
-                if role_match_lower in role_info['role'].lower():
-                    matching_columns.append(col_idx)
-            
-            # Extract data from matching columns
-            for row_idx, row in enumerate(rows):
-                cells = row.get('cells', [])
-                
-                for col_idx in matching_columns:
-                    if col_idx < len(cells):
-                        cell_value = cells[col_idx].strip()
-                        
-                        # Skip empty cells
-                        if not cell_value or cell_value == '-':
-                            continue
-                        
-                        # Get the scientist name (usually first column)
-                        scientist_name = cells[0].strip() if len(cells) > 0 else "Unknown"
-                        
-                        result = {
-                            'table': table.get('title', ''),
-                            'row_index': row_idx,
-                            'role': role_columns[col_idx]['role'],
-                            'subcategory': role_columns[col_idx]['subcategory'],
-                            'scientist': scientist_name,
-                            'value': cell_value,
-                            'full_row': cells
-                        }
-                        results.append(result)
-        
-        # Search based on value_match
-        if value_match:
-            value_match_lower = value_match.strip().lower()
-            
-            for row_idx, row in enumerate(rows):
-                cells = row.get('cells', [])
-                
-                for col_idx, cell_value in enumerate(cells):
-                    if value_match_lower in cell_value.strip().lower():
-                        # Get role information for this column
-                        role_info = role_columns.get(col_idx, {
-                            'role': 'Unknown',
-                            'subcategory': 'Unknown'
-                        })
-                        
-                        scientist_name = cells[0].strip() if len(cells) > 0 else "Unknown"
-                        
-                        result = {
-                            'table': table.get('title', ''),
-                            'row_index': row_idx,
-                            'role': role_info.get('role', 'Unknown'),
-                            'subcategory': role_info.get('subcategory', 'Unknown'),
-                            'scientist': scientist_name,
-                            'value': cell_value.strip(),
-                            'column_index': col_idx,
-                            'full_row': cells
-                        }
-                        results.append(result)
-        
-        return results
-
-    def search_standard_table(self, table, headers, rows, role_match=None, value_match=None):
-        """
-        Standard search logic for tables with simple header structure.
-        """
-        results = []
-        
-        # Flatten headers if multi-level
-        flat_headers = []
-        if headers:
-            if isinstance(headers[0], list):
-                # Multi-level headers - use the last level
-                flat_headers = [h.get('text', '') for h in headers[-1]]
-            elif isinstance(headers[0], dict):
-                flat_headers = [h.get('text', '') for h in headers]
-            else:
-                flat_headers = headers
-        
-        # Search based on role_match (column name)
-        if role_match:
-            role_match_lower = role_match.strip().lower()
-            
-            # Find matching column indices
-            matching_cols = []
-            for idx, header in enumerate(flat_headers):
-                if role_match_lower in header.lower():
-                    matching_cols.append(idx)
-            
-            # Extract data from matching columns
-            for row_idx, row in enumerate(rows):
-                cells = row.get('cells', [])
-                
-                for col_idx in matching_cols:
-                    if col_idx < len(cells):
-                        cell_value = cells[col_idx].strip()
-                        
-                        if not cell_value:
-                            continue
-                        
-                        result = {
-                            'table': table.get('title', ''),
-                            'row_index': row_idx,
-                            'column': flat_headers[col_idx] if col_idx < len(flat_headers) else f"Column {col_idx}",
-                            'value': cell_value,
-                            'full_row': cells
-                        }
-                        results.append(result)
-        
-        # Search based on value_match
-        if value_match:
-            value_match_lower = value_match.strip().lower()
-            
-            for row_idx, row in enumerate(rows):
-                cells = row.get('cells', [])
-                
-                for col_idx, cell_value in enumerate(cells):
-                    if value_match_lower in cell_value.strip().lower():
-                        result = {
-                            'table': table.get('title', ''),
-                            'row_index': row_idx,
-                            'column': flat_headers[col_idx] if col_idx < len(flat_headers) else f"Column {col_idx}",
-                            'value': cell_value.strip(),
-                            'column_index': col_idx,
-                            'full_row': cells
-                        }
-                        results.append(result)
-        
-        return results
 
 def print_search_results(results: List[SearchResult], max_display: int = 20):
     """Pretty print search results."""
@@ -1268,226 +483,89 @@ def print_search_results(results: List[SearchResult], max_display: int = 20):
     print("=" * 80)
     
     for i, result in enumerate(results[:max_display]):
-        print(f"\n[{i+1}] Table {result.table_index} ({result.table_source})")
+        print(f"\n[{i+1}] Table {result.table_index} ({result.table_type.upper()})")
         if result.table_title:
-            print(f"    Table Title: {result.table_title}")
+            print(f"    Title: {result.table_title}")
+        print(f"    Position: Row {result.row}, Col {result.col}")
+        print(f"    Column: {result.header}")
+        print(f"    Value: {result.cell_text}")
+        print(f"    Match Type: {result.match_type}")
+        print(f"    Match Score: {result.match_score:.2f}")
         
-        if result.match_type == "title":
-            print(f"    Match Type: Title Match")
-            print(f"    Match Score: {result.match_score:.2f}")
-        else:
-            print(f"    Position: Row {result.row}, Col {result.col}")
-            print(f"    Column: {result.header}")
-            if result.header_levels:
-                levels_str = " → ".join([f"'{l}'" for l in result.header_levels if l])
-                print(f"    Header Hierarchy: {levels_str}")
-            print(f"    Value: {result.cell_text}")
-            print(f"    Match Type: {result.match_type}")
-            if result.matched_header_level is not None:
-                print(f"    Matched Header Level: {result.matched_header_level}")
-            print(f"    Match Score: {result.match_score:.2f}")
-            if result.context:
-                print(f"    Context: {result.context['position']} in {result.context['table_size']} table")
+        if result.context:
+            print(f"    Context: {result.context}")
     
     if len(results) > max_display:
         print(f"\n... and {len(results) - max_display} more results")
 
-def print_enriched_results(results: List[Dict[str, Any]], max_display: int = 20):
-    """Pretty print enriched search results with full row data."""
+
+def print_row_results(results: List[Dict[str, Any]], max_display: int = 20):
+    """Pretty print row search results."""
     print(f"\n{'=' * 80}")
-    print(f"Found {len(results)} results")
+    print(f"Found {len(results)} matching rows")
     print("=" * 80)
     
     for i, result in enumerate(results[:max_display]):
-        print(f"\n[{i+1}] Table {result['table_index']} ({result['table_source']})")
+        print(f"\n[{i+1}] Table {result['table_index']} ({result['table_type'].upper()})")
         if result.get('table_title'):
-            print(f"    Table Title: {result['table_title']}")
+            print(f"    Title: {result['table_title']}")
         print(f"    Row: {result['row']}")
-        
-        if 'matched_column' in result:
-            print(f"    Matched in column: {result['matched_column']}")
-            print(f"    Matched value: {result['matched_value']}")
-            print(f"    Match Score: {result['match_score']:.2f}")
-            print(f"\n    Full Row Data:")
-            for header, value in result['row_data'].items():
-                print(f"      {header}: {value}")
-        
-        elif 'search_column' in result:
-            print(f"    Search Column: {result['search_column']}")
-            print(f"    Search Value: {result['search_value']}")
-            print(f"    Return Column: {result['return_column']}")
-            print(f"    Return Value: {result['return_value']}")
-            print(f"    Match Score: {result['match_score']:.2f}")
+        print(f"    Matched: {result['matched_column']} = '{result['matched_value']}'")
+        print(f"    Match Score: {result['match_score']:.2f}")
+        print(f"\n    Full Row Data:")
+        for header, value in result['row_data'].items():
+            print(f"      {header}: {value}")
     
     if len(results) > max_display:
         print(f"\n... and {len(results) - max_display} more results")
 
-# Example usage and comprehensive tests
+
+# Example usage
 if __name__ == "__main__":
+    # Load table data
     output_dir = "./results"
-    # Load table data from JSON
     with open(f'{output_dir}/all_tables_output.json', 'r', encoding='utf-8') as f:
         tables_data = json.load(f)
     
     # Initialize search engine
-    search_engine = TableSearchEngine(tables_data)
+    engine = UnifiedTableSearchEngine(tables_data)
     
     print("=" * 80)
-    print("ADVANCED TABLE SEARCH ENGINE - WITH ROW VALUE RETRIEVAL")
+    print("UNIFIED TABLE SEARCH ENGINE")
+    print("Handles both VERTICAL and HORIZONTAL tables automatically")
     print("=" * 80)
-
-    results = search_engine.search_roles_and_values_in_table(
-        f'{output_dir}/all_tables_output.json',
-        'CONTRIBUTING SCIENTISTS',
-        role_match='Clinical Assessment'
+    
+    # Example 1: List all tables
+    print("\n1. List all tables:")
+    all_tables = engine.list_all_tables()
+    for t in all_tables:
+        print(f"  Table {t['index']}: '{t['title']}' ({t['type']}, {t['size']})")
+    
+    # Example 2: Search for "Pathology" in vertical table
+    print("\n2. Search for 'Pathology' key in vertical tables:")
+    results = engine.search_by_key_value(
+        key_query="Pathology",
+        table_title="CONTRIBUTING SCIENTISTS"
     )
+    print_search_results(results)
     
-    print(f"Found {len(results)} results for Clinical Assessment:")
-    for result in results:
-        print(f"\nScientist: {result['scientist']}")
-        print(f"Role: {result['role']}")
-        print(f"Subcategory: {result['subcategory']}")
-        print(f"Value: {result['value']}")
-    
-    print("\n" + "="*80 + "\n")
-    
-    # Search for Pathology role
-    results = search_engine.search_roles_and_values_in_table(
-        f'{output_dir}/all_tables_output.json',
-        'CONTRIBUTING SCIENTISTS',
-        role_match='Pathology'
+    # Example 3: Search by column in horizontal table
+    print("\n3. Search for group number '2' in Experimental Design table:")
+    results = engine.get_row_by_column_value(
+        column_name="Group Number",
+        value_query="2",
+        table_title="Experimental Design"
     )
+    print_row_results(results)
     
-    print(f"Found {len(results)} results for Pathology:")
-    for result in results:
-        print(f"\nScientist: {result['scientist']}")
-        print(f"Role: {result['role']}")
-        print(f"Subcategory: {result['subcategory']}")
-        print(f"Value: {result['value']}")
-
-    # # Method 1: Get just the Details value for "Pathology"
-    # results = search_engine.search_and_get_column_value(
-    #     query="Pathology",
-    #     search_column="Pathology",
-    #     return_column="Pathology",
-    #     table_title="**3 CONTRIBUTING SCIENTISTS**"
-    # )
-
-    # for r in results:
-    #     print(f"Pathology: {r['search_value']}")
-    #     print(f"Pathology: {r['return_value']}")
-
-    # # Method 2: Get entire row data
-    # results = search_engine.search_with_related_columns(
-    #     query="Pathology",
-    #     search_column="Pathology",
-    #     table_title="**3 CONTRIBUTING SCIENTISTS**"
-    # )
-
-    # for r in results:
-    #     print(f"\nFound '{r['matched_value']}' in row {r['row']}")
-    #     print("Full row data:")
-    #     for header, value in r['row_data'].items():
-    #         print(f"  {header}: {value}")
+    # Example 4: Search anywhere
+    print("\n4. Search for 'mg/kg' anywhere:")
+    results = engine.search_anywhere(
+        query="mg/kg",
+        max_results=10
+    )
+    print_search_results(results)
     
-    # # Example 1: List all tables
-    # print("\n" + "=" * 80)
-    # print("1. List all tables:")
-    # print("=" * 80)
-    # all_tables = search_engine.list_all_tables()
-    # for t in all_tables:
-    #     print(f"  Table {t['index']}: '{t['title']}' ({t['source']}, {t['size']})")
-    
-    # # Example 2: Search for "Pathology" and get the Details value
-    # print("\n" + "=" * 80)
-    # print("2. Search for 'Pathology' in Role column, return Details value:")
-    # print("=" * 80)
-    # results = search_engine.search_and_get_column_value(
-    #     query="Pathology",
-    #     search_column="Role",
-    #     return_column="Details",
-    #     table_title="CONTRIBUTING SCIENTISTS"
-    # )
-    # print_enriched_results(results)
-    
-    # # Example 3: Search for "Pathology" and get entire row
-    # print("\n" + "=" * 80)
-    # print("3. Search for 'Pathology' and get entire row data:")
-    # print("=" * 80)
-    # results = search_engine.search_with_related_columns(
-    #     query="Pathology",
-    #     search_column="Role",
-    #     table_title="CONTRIBUTING SCIENTISTS"
-    # )
-    # print_enriched_results(results)
-    
-    # # Example 4: Get all rows with "Pathology" in any column
-    # print("\n" + "=" * 80)
-    # print("4. Search for 'Pathology' in any column, return full rows:")
-    # print("=" * 80)
-    # results = search_engine.search_with_related_columns(
-    #     query="Pathology",
-    #     table_title="CONTRIBUTING SCIENTISTS"
-    # )
-    # print_enriched_results(results)
-    
-    # # Example 5: Get specific row data by index
-    # print("\n" + "=" * 80)
-    # print("5. Get row 3 data from table 0:")
-    # print("=" * 80)
-    # row_data = search_engine.get_row_data(table_index=0, row_number=3)
-    # print("    Row data as dict:")
-    # for header, value in row_data.items():
-    #     print(f"      {header}: {value}")
-    
-    # # Example 6: Search "Director" and return specific columns
-    # print("\n" + "=" * 80)
-    # print("6. Search for 'Director', return only Role and Details columns:")
-    # print("=" * 80)
-    # results = search_engine.search_with_related_columns(
-    #     query="Director",
-    #     return_columns=["Role", "Details"],
-    #     table_title="CONTRIBUTING SCIENTISTS"
-    # )
-    # print_enriched_results(results)
-    
-    # # Example 7: Multiple searches with column values
-    # print("\n" + "=" * 80)
-    # print("7. Find all roles containing 'Pathology' and their details:")
-    # print("=" * 80)
-    # results = search_engine.search_and_get_column_value(
-    #     query="Pathology",
-    #     search_column="Role",
-    #     return_column="Details",
-    #     mode=SearchMode.CONTAINS
-    # )
-    # for i, r in enumerate(results):
-    #     print(f"\n  [{i+1}] {r['search_value']} → {r['return_value']}")
-    
-    # # Example 8: Get specific cell value
-    # print("\n" + "=" * 80)
-    # print("8. Get 'Details' value from row 3 of table 0:")
-    # print("=" * 80)
-    # details_value = search_engine.get_cell_value_by_header(
-    #     table_index=0,
-    #     row_number=3,
-    #     header_name="Details"
-    # )
-    # print(f"    Details: {details_value}")
-    
-    # # Example 9: Export enriched results
-    # print("\n" + "=" * 80)
-    # print("9. Export enriched search results:")
-    # print("=" * 80)
-    # results = search_engine.search_with_related_columns(
-    #     query="Pathology",
-    #     table_title="CONTRIBUTING SCIENTISTS",
-    #     max_results=10
-    # )
-    # with open('enriched_search_results.json', 'w', encoding='utf-8') as f:
-    #     json.dump(results, f, indent=2, ensure_ascii=False)
-    # print("    ✓ Saved to enriched_search_results.json")
-    
-    # print("\n" + "=" * 80)
-    # print("SEARCH ENGINE READY")
-    # print("=" * 80)
+    print("\n" + "=" * 80)
+    print("SEARCH ENGINE READY")
+    print("=" * 80)
