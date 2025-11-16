@@ -292,13 +292,18 @@ def tables_to_dataframes(structured_tables):
 
 
 if __name__ == "__main__":
-    pdf_path = "input/sample-4.pdf"
-    output_dir = "."
-    
-    print("Extracting ALL tables (including figures) from sample-4.pdf using marker-py...\n")
-    
+    pdf_path = "dont_sync/Study Reports/DN23114/Input/Source Files/dn23114-protocol-amend04.pdf"
+    output_dir = "results"
+
+    print(f"Extracting ALL tables (including figures) from {pdf_path} using marker-py...\n")
+
+    # Save to CSV
+    output_dir_path = Path(output_dir)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
+    s_output_dir_path = output_dir_path.resolve().as_posix()
+
     # Extract all tables and figures
-    tables, full_markdown = extract_all_tables_and_figures(pdf_path, output_dir)
+    tables, full_markdown = extract_all_tables_and_figures(pdf_path, s_output_dir_path)
     
     print(f"\n{'=' * 80}")
     print(f"EXTRACTED {len(tables)} TOTAL TABLES:")
@@ -314,9 +319,9 @@ if __name__ == "__main__":
             print(f"  Row {c['row']}, Col {c['col']} ({c['header']}): {c['text']}")
     
     # Save to JSON
-    with open('all_tables_output.json', 'w', encoding='utf-8') as f:
+    with open(output_dir_path / 'all_tables_output.json', 'w', encoding='utf-8') as f:
         json.dump(tables, f, indent=2, ensure_ascii=False)
-    print(f"\n✓ Saved detailed table data to all_tables_output.json")
+    print(f"\n Saved detailed table data to all_tables_output.json")
     
     # Convert to DataFrames
     dfs = tables_to_dataframes(tables)
@@ -324,12 +329,10 @@ if __name__ == "__main__":
     print(f"\n{'=' * 80}")
     print("DATAFRAMES:")
     print("=" * 80)
-    
+
     for t in dfs:
         print(f"\n--- Table {t['index']} (source: {t['source']}, shape: {t['shape']}) ---")
         print(t['df'])
-        
-        # Save to CSV
-        csv_filename = f"table_{t['index']}_{t['source']}.csv"
+        csv_filename = output_dir_path / f"table_{t['index']}_{t['source']}.csv"
         t['df'].to_csv(csv_filename, index=False)
-        print(f"✓ Saved to {csv_filename}")
+        print(f"Saved to {csv_filename}")

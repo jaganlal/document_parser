@@ -1,6 +1,8 @@
+.DS_Store
+dont_sync/
 env/
 scratch/
-.DS_Store
+results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
