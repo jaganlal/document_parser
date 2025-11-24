@@ -5,6 +5,7 @@ Handles BOTH vertical key-value tables and standard horizontal tables automatica
 
 import re
 import json
+import os
 import pandas as pd
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -12,6 +13,54 @@ from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from PIL import Image
 import pytesseract
+
+
+
+def normalize_superscript_subscript(text: str) -> str:
+    """
+    Normalize superscript and subscript characters to their regular equivalents with markers.
+    This helps preserve the semantic meaning of super/subscripts in the extracted text.
+    """
+    # Unicode superscript mappings
+    superscript_map = {
+        '⁰': '^0', '¹': '^1', '²': '^2', '³': '^3', '⁴': '^4',
+        '⁵': '^5', '⁶': '^6', '⁷': '^7', '⁸': '^8', '⁹': '^9',
+        'ᵃ': '^a', 'ᵇ': '^b', 'ᶜ': '^c', 'ᵈ': '^d', 'ᵉ': '^e',
+        'ᶠ': '^f', 'ᵍ': '^g', 'ʰ': '^h', 'ⁱ': '^i', 'ʲ': '^j',
+        'ᵏ': '^k', 'ˡ': '^l', 'ᵐ': '^m', 'ⁿ': '^n', 'ᵒ': '^o',
+        'ᵖ': '^p', 'ʳ': '^r', 'ˢ': '^s', 'ᵗ': '^t', 'ᵘ': '^u',
+        'ᵛ': '^v', 'ʷ': '^w', 'ˣ': '^x', 'ʸ': '^y', 'ᶻ': '^z',
+        'ᴬ': '^A', 'ᴮ': '^B', 'ᴰ': '^D', 'ᴱ': '^E', 'ᴳ': '^G',
+        'ᴴ': '^H', 'ᴵ': '^I', 'ᴶ': '^J', 'ᴷ': '^K', 'ᴸ': '^L',
+        'ᴹ': '^M', 'ᴺ': '^N', 'ᴼ': '^O', 'ᴾ': '^P', 'ᴿ': '^R',
+        'ᵀ': '^T', 'ᵁ': '^U', 'ⱽ': '^V', 'ᵂ': '^W',
+        '⁺': '^+', '⁻': '^-', '⁼': '^=', '⁽': '^(', '⁾': '^)',
+    }
+    
+    # Unicode subscript mappings
+    subscript_map = {
+        '₀': '_0', '₁': '_1', '₂': '_2', '₃': '_3', '₄': '_4',
+        '₅': '_5', '₆': '_6', '₇': '_7', '₈': '_8', '₉': '_9',
+        'ₐ': '_a', 'ₑ': '_e', 'ₕ': '_h', 'ᵢ': '_i', 'ⱼ': '_j',
+        'ₖ': '_k', 'ₗ': '_l', 'ₘ': '_m', 'ₙ': '_n', 'ₒ': '_o',
+        'ₚ': '_p', 'ᵣ': '_r', 'ₛ': '_s', 'ₜ': '_t', 'ᵤ': '_u',
+        'ᵥ': '_v', 'ₓ': '_x',
+        '₊': '_+', '₋': '_-', '₌': '_=', '₍': '_(', '₎': '_)',
+    }
+    
+    # Apply superscript replacements
+    for unicode_char, replacement in superscript_map.items():
+        text = text.replace(unicode_char, replacement)
+    
+    # Apply subscript replacements
+    for unicode_char, replacement in subscript_map.items():
+        text = text.replace(unicode_char, replacement)
+    
+    # Also handle common patterns like "a, b" that should be "^a, ^b"
+    # This is a heuristic for cases where marker-py loses the superscript formatting
+    text = re.sub(r'([a-z]),\s*([a-z])(?=\s|$)', r'^\1, ^\2', text)
+    
+    return text
 
 
 def parse_markdown_tables_with_context(markdown: str) -> List[Dict[str, Any]]:
@@ -138,7 +187,7 @@ def _split_markdown_row(row: str) -> List[str]:
         row = row[1:]
     if row.endswith("|"):
         row = row[:-1]
-    cells = [c.strip() for c in row.split("|")]
+    cells = [normalize_superscript_subscript(c.strip()) for c in row.split("|")]
     return cells
 
 
@@ -165,10 +214,16 @@ def _parse_single_markdown_table(lines: List[str]) -> Dict[str, Any]:
 
 
 def clean_cell_text(text: str) -> str:
-    """Clean up cell text: remove <br>, normalize whitespace."""
-    text = text.replace("<br>", " ")
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    """Clean up cell text: preserve <br> as newline, normalize other whitespace."""
+    # Replace <br> variants with newline
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    
+    # Normalize spaces but keep newlines
+    lines = text.split('\n')
+    cleaned_lines = [re.sub(r"\s+", " ", line).strip() for line in lines]
+    cleaned_lines = [re.sub(r"\s+", " ", line).strip() for line in lines]
+    text = "\n".join(line for line in cleaned_lines if line)
+    return normalize_superscript_subscript(text)
 
 
 def is_numeric_cell(text: str) -> bool:
@@ -299,7 +354,10 @@ def detect_header_rows_horizontal(rows: List[List[str]]) -> int:
             for cell in row
         )
         
-        if has_units or has_header_keywords or numeric_count == 0:
+        # Check for superscript/subscript markers (common in headers)
+        has_super_sub = any('^' in cell or '_' in cell for cell in row)
+        
+        if has_units or has_header_keywords or numeric_count == 0 or has_super_sub:
             header_row_count = i + 1
         else:
             break
@@ -402,7 +460,8 @@ def build_column_header_hierarchy(
             levels = [f"Column_{col_idx}"]
         
         non_empty_levels = [l for l in levels if l]
-        full_path = " | ".join(non_empty_levels) if non_empty_levels else f"Column_{col_idx}"
+        # Use newline for hierarchy to preserve visual structure in search results
+        full_path = "\n".join(non_empty_levels) if non_empty_levels else f"Column_{col_idx}"
         
         column_headers.append({
             "col": col_idx,
@@ -548,6 +607,9 @@ def extract_all_tables_from_pdf(pdf_path: str, output_dir: str = "."):
     rendered = converter(pdf_path)
     markdown = rendered.markdown
     
+    # Apply normalization to the full markdown to ensure saved file is correct
+    markdown = normalize_superscript_subscript(markdown)
+    
     # Save images if they exist
     if hasattr(rendered, 'images') and rendered.images:
         for img_name, img_obj in rendered.images.items():
@@ -616,11 +678,23 @@ def print_table_summary(table: Dict[str, Any]):
         print(f"  [{cell['row']}, {cell['col']}] {cell['header']}: '{cell['text']}'")
 
 
+import argparse
+
 if __name__ == "__main__":
-    pdf_path = "dont_sync/Study Reports/DN23114/Input/Source Files/dn23114-protocol-amend04.pdf"
-    output_dir = "./results"
+    parser = argparse.ArgumentParser(description="Extract tables and markdown from PDF using Marker")
+    parser.add_argument("input_pdf", nargs='?', default="./dont_sync/Study Reports/DN23114/Input/Source Files/dn23114-protocol-amend04.pdf", help="Path to input PDF file")
+    parser.add_argument("--output_dir", default="./results_2", help="Directory to save results")
+    parser.add_argument("--save_markdown", action="store_true", default=True, help="Save full markdown to file")
     
-    print("Extracting tables with automatic structure detection...\n")
+    args = parser.parse_args()
+    
+    pdf_path = args.input_pdf
+    output_dir = args.output_dir
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    print(f"Extracting tables and markdown from {pdf_path}...\n")
     
     tables, full_markdown = extract_all_tables_from_pdf(pdf_path, output_dir)
     
@@ -628,7 +702,16 @@ if __name__ == "__main__":
         print_table_summary(table)
     
     # Save to JSON
-    output_file = f'{output_dir}/all_tables_output.json'
-    with open(output_file, 'w', encoding='utf-8') as f:
+    output_json = Path(output_dir) / 'all_tables_output.json'
+    with open(output_json, 'w', encoding='utf-8') as f:
         json.dump(tables, f, indent=2, ensure_ascii=False)
-    print(f"\n✓ Saved detailed table data to {output_file}")
+    print(f"\n✓ Saved detailed table data to {output_json}")
+
+    # Save Full Markdown
+    if args.save_markdown:
+        # Use the PDF filename for the markdown file
+        pdf_name = Path(pdf_path).stem
+        output_md = Path(output_dir) / f"{pdf_name}.md"
+        with open(output_md, 'w', encoding='utf-8') as f:
+            f.write(full_markdown)
+        print(f"✓ Saved full markdown to {output_md}")

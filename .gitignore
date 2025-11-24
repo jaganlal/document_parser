@@ -2,8 +2,8 @@
 dont_sync/
 env/
 scratch/
-results/
-
+results*/
+queries*/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

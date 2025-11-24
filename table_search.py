@@ -487,8 +487,8 @@ def print_search_results(results: List[SearchResult], max_display: int = 20):
         if result.table_title:
             print(f"    Title: {result.table_title}")
         print(f"    Position: Row {result.row}, Col {result.col}")
-        print(f"    Column: {result.header}")
-        print(f"    Value: {result.cell_text}")
+        print(f"    Column: {result.header.replace(chr(10), ' ')}")
+        print(f"    Value: {result.cell_text.replace(chr(10), ' ')}")
         print(f"    Match Type: {result.match_type}")
         print(f"    Match Score: {result.match_score:.2f}")
         
@@ -513,8 +513,12 @@ def print_row_results(results: List[Dict[str, Any]], max_display: int = 20):
         print(f"    Matched: {result['matched_column']} = '{result['matched_value']}'")
         print(f"    Match Score: {result['match_score']:.2f}")
         print(f"\n    Full Row Data:")
+        print(f"\n    Full Row Data:")
         for header, value in result['row_data'].items():
-            print(f"      {header}: {value}")
+            # Handle multi-line values for better display
+            header_str = header.replace('\n', ' ')
+            value_str = str(value).replace('\n', '\n' + ' ' * (len(header_str) + 8))
+            print(f"      {header_str}: {value_str}")
     
     if len(results) > max_display:
         print(f"\n... and {len(results) - max_display} more results")
